@@ -586,13 +586,16 @@ select.inp{appearance:none;-webkit-appearance:none;
       </div>
       <div class="row2">
         <div class="field"><label for="g-cliente">Cliente</label>
-          <input id="g-cliente" class="inp" type="text" list="dl-clientes" autocomplete="off" placeholder="Escribe o elige">
-          <datalist id="dl-clientes"></datalist></div>
+          <select id="g-cliente" class="inp" onchange="toggleClienteExtras()"></select></div>
         <div class="field"><label for="g-proyecto">Proyecto</label>
           <input id="g-proyecto" class="inp" type="text" list="dl-proyectos" autocomplete="off" placeholder="Escribe o elige">
           <datalist id="dl-proyectos"></datalist></div>
       </div>
-      <p class="foot" style="margin:-2px 0 14px">Escribe un cliente o proyecto nuevo y queda guardado para la próxima vez. Los puedes renombrar o borrar en <b style="color:var(--cy)">Exportar → Configuración</b>.</p>
+      <div class="field" id="cliente-otro-block" style="display:none">
+        <label for="g-cliente-otro">¿Cuál cliente? (se anota para agregarlo en una próxima actualización)</label>
+        <input id="g-cliente-otro" class="inp" type="text" autocomplete="off" placeholder="Escribe el nombre del cliente">
+      </div>
+      <p class="foot" style="margin:-2px 0 14px">Escribe un proyecto nuevo y queda guardado para la próxima vez. Lo puedes renombrar o borrar en <b style="color:var(--cy)">Exportar → Configuración</b>.</p>
       <div class="field"><label for="g-caja">Caja chica (opcional)</label><select id="g-caja" class="inp"></select></div>
       <div class="field"><label for="g-desc">Descripción (proveedor, detalle)</label><input id="g-desc" class="inp" type="text" placeholder="Ej: Copec Ruta 5, Almuerzo cliente…"></div>
 
@@ -824,22 +827,12 @@ select.inp{appearance:none;-webkit-appearance:none;
     <div class="hud-body">
       <div class="sec-head">
         <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h12"/></svg></div>
-        <h2>Clientes, proyectos y categorías</h2>
+        <h2>Proyectos</h2>
       </div>
-      <p class="sec-sub">Se van creando solos cuando escribes uno nuevo al registrar un gasto. Acá puedes corregir un nombre mal escrito o borrar los que no uses. El número indica en cuántos gastos se está usando.</p>
-
-      <div class="eyebrow">Clientes</div>
-      <div class="lista" id="lista-clientes"></div>
+      <p class="sec-sub">Los clientes y categorías son una lista fija que define la empresa. Si necesitas uno que no está, usa la opción "Otros" al registrar el gasto y anota el nombre — se agrega oficialmente en una próxima actualización de la app. Los proyectos sí se van creando solos cuando escribes uno nuevo al registrar un gasto; acá puedes corregir un nombre mal escrito o borrar los que no uses. El número indica en cuántos gastos se está usando.</p>
 
       <div class="eyebrow">Proyectos</div>
       <div class="lista" id="lista-proyectos"></div>
-
-      <div class="eyebrow">Categorías</div>
-      <div class="lista" id="lista-categorias"></div>
-      <div class="field" style="margin-top:12px"><label for="cat-nueva">Agregar categoría</label>
-        <input id="cat-nueva" class="inp" type="text" placeholder="Ej: Capacitación"></div>
-      <button class="btn btn-ghost" onclick="addCategoria()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Agregar categoría</button>
       <p class="foot">Renombrar corrige el nombre en todos los gastos que ya lo usan. No se puede borrar algo que esté en uso.</p>
     </div>
   </div>
@@ -979,7 +972,7 @@ const CAT_KM = "Vehículo particular (Km)";
 const DEF={
   nextId:1, gastos:[], cajas:[], vehiculos:[],
   categorias:[CAT_KM,"Alimentación","Transporte","Alojamiento","Peajes y Estacionamiento","Materiales e Insumos","Otros"],
-  clientes:[], proyectos:[], empleado:"",
+  clientes:["Rozno","Intercal","TDS","Data Center Paine","G8","NVL","Otros"], proyectos:[], empleado:"",
   /* Política de kilometraje: la define la empresa en el código, no el usuario.
      Sube `version` cuando cambien los valores. */
   configKm:{version:1, precioPromedio:1450, rendimientoAuto:12, rendimientoMoto:30, desgastePct:10},
@@ -1089,6 +1082,7 @@ function normalizeGasto(g){
     fecha: fechaValida(g.fecha) ? g.fecha : today(),
     categoria: txt(g.categoria).slice(0,120) || 'Otros',
     cliente: txt(g.cliente).slice(0,120),
+    clienteDetalle: txt(g.clienteDetalle).slice(0,120) || null,
     proyecto: txt(g.proyecto).slice(0,120),
     descripcion: txt(g.descripcion).slice(0,300),
     monto: Math.max(0, Math.round(num(g.monto, 0))),
@@ -1146,13 +1140,17 @@ function normalizeDb(raw){
   d.gastos      = esArr(r.gastos).map(normalizeGasto).filter(Boolean);
   d.cajas       = esArr(r.cajas).map(normalizeCaja).filter(Boolean);
   d.vehiculos   = esArr(r.vehiculos).map(normalizeVehiculo).filter(Boolean);
-  d.clientes    = textos(r.clientes);
   d.proyectos   = textos(r.proyectos);
 
   /* La política de kilometraje NO se toma del respaldo ni del almacenamiento: viene fija
      en el código. Así el empleado no puede alterar su propio reembolso y un JSON con
      `configKm` incompleto no deja valores en `undefined`. */
   d.configKm = structuredClone(DEF.configKm);
+
+  /* Clientes: igual que configKm, la lista la define la empresa en el código, no cada
+     teléfono. Lo que aparezca en gastos viejos y ya no esté en la lista fija se recupera
+     más abajo, para no romper el filtro/edición de datos históricos. */
+  d.clientes = structuredClone(DEF.clientes);
 
   // categorías: se quitan las deprecadas y se agregan las nuevas, sin pisar personalizadas
   const cats = textos(r.categorias);
@@ -1253,6 +1251,9 @@ function toast(msg, err){
 function esc(s){
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+function clienteLabel(g){
+  return g.cliente === 'Otros' && g.clienteDetalle ? `${g.cliente}: ${g.clienteDetalle}` : (g.cliente || '');
+}
 function fill(sel, arr, placeholder){
   const el = $(sel); const val = el.value;
   el.innerHTML = (placeholder ? `<option value="">${esc(placeholder)}</option>` : '') +
@@ -1261,6 +1262,11 @@ function fill(sel, arr, placeholder){
 }
 function fillDatalist(id, arr){
   $(id).innerHTML = arr.map(o=>`<option value="${esc(o)}"></option>`).join('');
+}
+/* Clientes: orden alfabético, pero "Otros" siempre al final. */
+function ordenClientes(arr){
+  const normales = arr.filter(c=>c !== 'Otros').sort((a,b)=>a.localeCompare(b,'es',{sensitivity:'base'}));
+  return arr.includes('Otros') ? [...normales,'Otros'] : normales;
 }
 function fillCategorias(sel, placeholder, extra){
   const el = $(sel); const val = el.value;
@@ -1484,11 +1490,11 @@ function renderVehiculos(){
     </div>`).join('');
 }
 
-/* ========== LISTAS EDITABLES (clientes / proyectos / categorías) ========== */
+/* ========== LISTAS EDITABLES (proyectos) ==========
+   Clientes y categorías son fijos (los define la empresa en el código) y ya no
+   se pueden crear/renombrar/borrar desde acá. */
 const LISTAS = {
-  clientes:  {campo:'cliente',   el:'lista-clientes',   sing:'el cliente'},
-  proyectos: {campo:'proyecto',  el:'lista-proyectos',  sing:'el proyecto'},
-  categorias:{campo:'categoria', el:'lista-categorias', sing:'la categoría'}
+  proyectos: {campo:'proyecto',  el:'lista-proyectos',  sing:'el proyecto'}
 };
 function usoDe(clave, nombre){
   return db.gastos.filter(g=>g[LISTAS[clave].campo] === nombre).length;
@@ -1526,18 +1532,9 @@ function borrarItem(clave, nombre){
   const cfg = LISTAS[clave]; if(!cfg || !db[clave].includes(nombre)) return;
   const n = usoDe(clave, nombre);
   if(n) return toast(`"${nombre}" se usa en ${n} gasto(s): renómbralo en vez de borrarlo`, true);
-  if(clave === 'categorias' && db.categorias.length <= 1) return toast('Debe quedar al menos una categoría', true);
   if(!confirm(`¿Borrar ${cfg.sing} "${nombre}"?`)) return;
   if(!commit(()=>{ db[clave] = db[clave].filter(x=>x !== nombre); })) return;
   render(); toast('Eliminado');
-}
-function addCategoria(){
-  const n = $('cat-nueva').value.trim().slice(0,120);
-  if(!n) return toast('Escribe el nombre de la categoría', true);
-  if(db.categorias.some(c=>c.localeCompare(n,'es',{sensitivity:'base'}) === 0)) return toast('Esa categoría ya existe', true);
-  if(!commit(()=>{ db.categorias.push(n); })) return;
-  $('cat-nueva').value = '';
-  render(); toast('Categoría agregada');
 }
 
 /* ========== GASTOS ========== */
@@ -1545,6 +1542,9 @@ function toggleCategoriaExtras(){
   const esKm = $('g-categoria').value === CAT_KM;
   $('km-block').style.display = esKm ? 'block' : 'none';
   if(esKm) calcKm(false);
+}
+function toggleClienteExtras(){
+  $('cliente-otro-block').style.display = $('g-cliente').value === 'Otros' ? 'block' : 'none';
 }
 function vehiculoSeleccionado(){
   return db.vehiculos.find(v=>v.id === $('g-veh2').value) || null;
@@ -1573,10 +1573,12 @@ async function saveGasto(){
   if(btn.disabled) return;
   const monto = Math.round(num($('g-monto').value, 0));
   const desc = $('g-desc').value.trim().slice(0,300);
-  const cliente  = canonico(db.clientes,  $('g-cliente').value);
+  const cliente  = $('g-cliente').value;
+  const clienteDetalle = cliente === 'Otros' ? $('g-cliente-otro').value.trim().slice(0,120) : '';
   const proyecto = canonico(db.proyectos, $('g-proyecto').value);
   if(!(monto > 0)) return toast('Falta el monto', true);
-  if(!cliente) return toast('Escribe o elige un cliente', true);
+  if(!cliente) return toast('Elige un cliente', true);
+  if(cliente === 'Otros' && !clienteDetalle) return toast('Escribe el nombre del cliente en "Otros"', true);
   if(!desc) return toast('Falta la descripción', true);
 
   const cat = $('g-categoria').value || 'Otros';
@@ -1615,7 +1617,7 @@ async function saveGasto(){
     }
 
     const campos = {
-      id, fecha, categoria:cat, cliente, proyecto,
+      id, fecha, categoria:cat, cliente, clienteDetalle: clienteDetalle || null, proyecto,
       descripcion:desc, monto,
       cajaId: $('g-caja').value || null,
       km: isKm ? km : null,
@@ -1637,7 +1639,6 @@ async function saveGasto(){
         db.gastos.push({...campos, rendidoEn:null});
         db.nextId = id + 1;
       }
-      if(cliente  && !db.clientes.includes(cliente))   db.clientes.push(cliente);
       if(proyecto && !db.proyectos.includes(proyecto)) db.proyectos.push(proyecto);
     });
 
@@ -1662,6 +1663,7 @@ function editGasto(id){
   $('g-fecha').value = g.fecha;
   $('g-categoria').value = db.categorias.includes(g.categoria) ? g.categoria : ($('g-categoria').value || '');
   $('g-cliente').value = g.cliente || '';
+  $('g-cliente-otro').value = g.clienteDetalle || '';
   $('g-proyecto').value = g.proyecto || '';
   $('g-caja').value = g.cajaId || '';
   $('g-desc').value = g.descripcion || '';
@@ -1670,6 +1672,7 @@ function editGasto(id){
   if(g.vehiculoId && db.vehiculos.some(v=>v.id === g.vehiculoId)) $('g-veh2').value = g.vehiculoId;
   $('g-peaje').value = g.peajeMonto ?? '';
   toggleCategoriaExtras();
+  toggleClienteExtras();
   fotoData = null; thumbData = null;
   if(fotoValida(g.thumb)){
     $('preview-img').src = g.thumb;
@@ -1730,9 +1733,9 @@ function refreshSelects(){
   fillCategorias('g-categoria', null);
   // el filtro incluye además las categorías que solo existen en gastos viejos
   fillCategorias('f-categoria', 'Todas', db.gastos.map(g=>g.categoria));
-  fillDatalist('dl-clientes', db.clientes);
   fillDatalist('dl-proyectos', db.proyectos);
-  fill('f-cliente', db.clientes, 'Todos');
+  fill('g-cliente', ordenClientes(db.clientes));
+  fill('f-cliente', ordenClientes(db.clientes), 'Todos');
   fill('f-proyecto', db.proyectos, 'Todos');
 
   const vs = $('g-veh2'); const curV = vs.value;
@@ -1868,7 +1871,7 @@ function renderGastos(list){
         <div class="l1"><div class="desc">${esc(g.descripcion)}</div><div class="amt">${money(g.monto)}</div></div>
         <div class="tags">
           <span class="tag">${fmtDate(g.fecha)}</span>
-          ${g.cliente ? `<span class="tag cli">${esc(g.cliente)}</span>` : ''}
+          ${g.cliente ? `<span class="tag cli">${esc(clienteLabel(g))}</span>` : ''}
           ${g.proyecto ? `<span class="tag">${esc(g.proyecto)}</span>` : ''}
           <span class="tag">${esc(g.categoria)}</span>
           ${caja ? `<span class="tag">CAJA: ${esc(caja.glosa)}</span>` : ''}
@@ -1921,7 +1924,7 @@ function accionesDelegadas(){
     if(acc === 'borrar')    return delGasto(id);
     if(acc === 'desmarcar') return desmarcarRendicion(id);
   };
-  ['gastos-list','cajas-list','vehiculos-list','lista-clientes','lista-proyectos','lista-categorias'].forEach(id=>{
+  ['gastos-list','cajas-list','vehiculos-list','lista-proyectos'].forEach(id=>{
     const cont = $(id); if(!cont) return;
     cont.addEventListener('click', e=>{
       const t = e.target.closest('[data-accion]');
@@ -2222,7 +2225,7 @@ async function generarPDF(){
     <table class="main">
       <tr><th>Fecha</th><th>Cliente</th><th>Proyecto</th><th>Categoría</th><th>Descripción</th><th style="text-align:right">Monto</th><th>Rendido</th></tr>
       ${list.map(g=>`<tr>
-        <td>${fmtDate(g.fecha)}</td><td>${esc(g.cliente||'')}</td><td>${esc(g.proyecto||'')}</td>
+        <td>${fmtDate(g.fecha)}</td><td>${esc(clienteLabel(g))}</td><td>${esc(g.proyecto||'')}</td>
         <td>${esc(g.categoria||'')}</td><td>${esc(g.descripcion||'')}</td>
         <td class="r">${money(g.monto)}</td>
         <td>${g.rendidoEn ? `<span class="chk-ok">✓ ${fmtDate(g.rendidoEn)}</span>` : '<span class="chk-no">—</span>'}</td>
