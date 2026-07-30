@@ -1,0 +1,29 @@
+Copyright (c) 2026 True Controls. Todos los derechos reservados.
+
+Este software y los elementos de marca que lo acompañan (logotipo, nombre e identidad
+visual de True Controls) son propiedad de True Controls y se publican únicamente para
+su uso interno y su distribución al personal de la empresa.
+
+No se concede autorización para copiar, modificar, redistribuir ni usar este software
+o sus elementos de marca fuera de ese propósito sin permiso escrito de True Controls.
+
+Que el repositorio sea público (requisito de GitHub Pages en cuentas gratuitas) permite
+leer el código, pero no otorga ninguno de los derechos anteriores.
+
+
+EXCEPCIÓN — COMPONENTES DE TERCEROS
+
+La carpeta fonts/ contiene tipografías que NO son propiedad de True Controls y que
+conservan su propia licencia:
+
+  Chakra Petch    — Copyright 2018 The Chakra Petch Project Authors
+  Share Tech Mono — Copyright (c) 2012 Carrois Type Design, Ralph du Carrois
+
+Ambas se distribuyen bajo la SIL Open Font License 1.1, reproducida íntegramente en
+fonts/OFL.txt. Esa licencia rige para esos archivos y prevalece sobre el aviso de
+derechos reservados de arriba.
+
+NOTA PARA EL MANTENEDOR: si la intención es abrir el proyecto (permitir que cualquiera
+lo use, modifique y redistribuya), reemplaza este archivo por una licencia de código
+abierto — MIT es la habitual para algo así. Ten en cuenta que el logotipo y la marca
+normalmente se excluyen de la licencia de código, incluso en proyectos abiertos.
