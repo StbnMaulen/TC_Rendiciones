@@ -853,9 +853,16 @@ select.inp{appearance:none;-webkit-appearance:none;
         </div>
         <h2 style="color:var(--red);text-shadow:0 0 14px rgba(255,95,109,.35)">Zona de riesgo</h2>
       </div>
-      <button class="btn btn-danger" onclick="borrarRendidos()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>Borrar rendidos</button>
-      <p class="foot" style="margin-top:-6px">Borra solo las boletas ya marcadas como rendidas (y sus fotos) para liberar espacio; si estaban pagadas con caja chica, se descuenta el monto del total de esa caja. Las pendientes y el resto de tus datos no se tocan.</p>
+      <p class="sec-sub" style="margin-top:0">Marca lo que quieras borrar y presiona "Borrar lo seleccionado". El resto de tus datos no se toca.</p>
+      <label class="chk"><input type="checkbox" id="chk-del-nombre"><span class="box"></span><span class="txt">Nombre</span></label>
+      <label class="chk"><input type="checkbox" id="chk-del-proyectos"><span class="box"></span><span class="txt">Proyectos</span></label>
+      <label class="chk"><input type="checkbox" id="chk-del-vehiculos"><span class="box"></span><span class="txt">Vehículos</span></label>
+      <label class="chk"><input type="checkbox" id="chk-del-rendidas"><span class="box"></span><span class="txt">Boletas rendidas</span></label>
+      <label class="chk"><input type="checkbox" id="chk-del-pendientes"><span class="box"></span><span class="txt">Boletas no rendidas</span></label>
+      <label class="chk"><input type="checkbox" id="chk-del-caja"><span class="box"></span><span class="txt">Caja chica</span></label>
+      <button class="btn btn-danger" style="margin-top:10px" onclick="borrarSeleccionado()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>Borrar lo seleccionado</button>
+      <p class="foot" style="margin-top:-6px">Si borras boletas o cajas chicas, se descuenta/ajusta lo correspondiente para que los saldos queden correctos. Las fotos de las boletas borradas se eliminan con ellas.</p>
       <button class="btn btn-danger" onclick="wipeAll()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>Borrar todos los datos</button>
       <p class="foot">Esta acción no se puede deshacer. Descarga tu respaldo JSON antes de continuar.</p>
@@ -2276,17 +2283,56 @@ function borrarRendidasConfirmado(){
   render();
   toast(`${ids.length} boleta${ids.length === 1 ? '' : 's'} borrada${ids.length === 1 ? '' : 's'} del historial`);
 }
-function borrarRendidos(){
-  const rendidos = db.gastos.filter(g=>g.rendidoEn);
-  if(!rendidos.length) return toast('No hay boletas rendidas para borrar', true);
-  const total = rendidos.reduce((s,g)=>s + num(g.monto,0), 0);
-  if(!confirm(`¿Borrar ${rendidos.length} boleta${rendidos.length === 1 ? '' : 's'} rendida${rendidos.length === 1 ? '' : 's'} ` +
-    `por ${money(total)}? Se borran también sus fotos y, si estaban pagadas con caja chica, se descuenta el monto del ` +
-    `total de esa caja. Las pendientes no se tocan. Esta acción no se puede deshacer.`)) return;
-  const ids = rendidos.map(g=>g.id);
-  if(!borrarGastosEnBloque(ids)) return;
-  render();
-  toast(`${ids.length} boleta${ids.length === 1 ? '' : 's'} rendida${ids.length === 1 ? '' : 's'} borrada${ids.length === 1 ? '' : 's'}`);
+/* Borrado selectivo desde Zona de riesgo: cada casilla es independiente, se puede marcar
+   cualquier combinación y se borra todo junto con una sola confirmación. */
+function borrarSeleccionado(){
+  const opciones = {
+    nombre:     $('chk-del-nombre').checked,
+    proyectos:  $('chk-del-proyectos').checked,
+    vehiculos:  $('chk-del-vehiculos').checked,
+    rendidas:   $('chk-del-rendidas').checked,
+    pendientes: $('chk-del-pendientes').checked,
+    caja:       $('chk-del-caja').checked
+  };
+  if(!Object.values(opciones).some(Boolean)) return toast('Marca al menos una opción para borrar', true);
+
+  const nRendidas = db.gastos.filter(g=>g.rendidoEn).length;
+  const nPendientes = db.gastos.filter(g=>!g.rendidoEn).length;
+  const partes = [];
+  if(opciones.nombre) partes.push('el nombre');
+  if(opciones.proyectos) partes.push(`los proyectos (${db.proyectos.length})`);
+  if(opciones.vehiculos) partes.push(`los vehículos (${db.vehiculos.length})`);
+  if(opciones.rendidas) partes.push(`${nRendidas} boleta${nRendidas === 1 ? '' : 's'} rendida${nRendidas === 1 ? '' : 's'}`);
+  if(opciones.pendientes) partes.push(`${nPendientes} boleta${nPendientes === 1 ? '' : 's'} pendiente${nPendientes === 1 ? '' : 's'}`);
+  if(opciones.caja) partes.push(`las cajas chicas (${db.cajas.length})`);
+  if(!confirm(`Esto borra: ${partes.join(', ')}. Las fotos de las boletas borradas se eliminan con ellas. Esta acción no se puede deshacer. ¿Continuar?`)) return;
+
+  // Las boletas se borran primero (con su ajuste de caja chica), antes de tocar proyectos,
+  // vehículos o cajas, para reutilizar exactamente la misma lógica que ya usan "Borrar
+  // rendidos" y el borrado tras exportar el PDF.
+  let idsGastos = [];
+  if(opciones.rendidas) idsGastos = idsGastos.concat(db.gastos.filter(g=>g.rendidoEn).map(g=>g.id));
+  if(opciones.pendientes) idsGastos = idsGastos.concat(db.gastos.filter(g=>!g.rendidoEn).map(g=>g.id));
+  if(idsGastos.length && !borrarGastosEnBloque(idsGastos)) return;
+
+  const ok = commit(()=>{
+    if(opciones.nombre) db.empleado = '';
+    if(opciones.proyectos){
+      db.proyectos = [];
+      db.gastos.forEach(g=>{ g.proyecto = ''; });
+    }
+    if(opciones.vehiculos) db.vehiculos = [];
+    if(opciones.caja){
+      db.cajas = [];
+      db.gastos.forEach(g=>{ g.cajaId = null; });
+    }
+  });
+  if(!ok) return;
+  if(opciones.nombre) $('empleado').value = '';
+  ['chk-del-nombre','chk-del-proyectos','chk-del-vehiculos','chk-del-rendidas','chk-del-pendientes','chk-del-caja']
+    .forEach(id => { $(id).checked = false; });
+  render(); actualizarEspacio();
+  toast('Datos seleccionados borrados');
 }
 function cancelarMarcado(){
   cerrarModal('m-confirmar-rendido');
