@@ -586,16 +586,24 @@ select.inp{appearance:none;-webkit-appearance:none;
       </div>
       <div class="row2">
         <div class="field"><label for="g-cliente">Cliente</label>
-          <select id="g-cliente" class="inp" onchange="toggleClienteExtras()"></select></div>
+          <select id="g-cliente" class="inp" onchange="onClienteChange()"></select></div>
         <div class="field"><label for="g-proyecto">Proyecto</label>
-          <input id="g-proyecto" class="inp" type="text" list="dl-proyectos" autocomplete="off" placeholder="Escribe o elige">
-          <datalist id="dl-proyectos"></datalist></div>
+          <div id="proyecto-select-wrap"><select id="g-proyecto" class="inp" onchange="toggleProyectoExtras()"></select></div>
+          <div id="proyecto-libre-wrap" style="display:none">
+            <input id="g-proyecto-libre" class="inp" type="text" list="dl-proyectos" autocomplete="off" placeholder="Escribe o elige">
+            <datalist id="dl-proyectos"></datalist>
+          </div>
+        </div>
       </div>
       <div class="field" id="cliente-otro-block" style="display:none">
         <label for="g-cliente-otro">¿Cuál cliente? (se anota para agregarlo en una próxima actualización)</label>
         <input id="g-cliente-otro" class="inp" type="text" autocomplete="off" placeholder="Escribe el nombre del cliente">
       </div>
-      <p class="foot" style="margin:-2px 0 14px">Escribe un proyecto nuevo y queda guardado para la próxima vez. Lo puedes renombrar o borrar en <b style="color:var(--cy)">Exportar → Configuración</b>.</p>
+      <div class="field" id="proyecto-otro-block" style="display:none">
+        <label for="g-proyecto-otro">Nombre del proyecto nuevo</label>
+        <input id="g-proyecto-otro" class="inp" type="text" autocomplete="off" placeholder="Escribe el nombre del proyecto">
+      </div>
+      <p class="foot" style="margin:-2px 0 14px">Un proyecto nuevo queda guardado para la próxima vez, asociado al cliente elegido. Lo puedes renombrar o borrar en <b style="color:var(--cy)">Exportar → Configuración</b>.</p>
       <div class="field"><label for="g-caja">Caja chica (opcional)</label><select id="g-caja" class="inp"></select></div>
       <div class="field"><label for="g-desc">Descripción (proveedor, detalle)</label><input id="g-desc" class="inp" type="text" placeholder="Ej: Copec Ruta 5, Almuerzo cliente…"></div>
 
@@ -1140,7 +1148,6 @@ function normalizeDb(raw){
   d.gastos      = esArr(r.gastos).map(normalizeGasto).filter(Boolean);
   d.cajas       = esArr(r.cajas).map(normalizeCaja).filter(Boolean);
   d.vehiculos   = esArr(r.vehiculos).map(normalizeVehiculo).filter(Boolean);
-  d.proyectos   = textos(r.proyectos);
 
   /* La política de kilometraje NO se toma del respaldo ni del almacenamiento: viene fija
      en el código. Así el empleado no puede alterar su propio reembolso y un JSON con
@@ -1162,10 +1169,45 @@ function normalizeDb(raw){
   // lo que aparezca en los gastos pero falte en las listas se recupera
   d.gastos.forEach(g=>{
     if(g.cliente  && !d.clientes.includes(g.cliente))   d.clientes.push(g.cliente);
-    if(g.proyecto && !d.proyectos.includes(g.proyecto)) d.proyectos.push(g.proyecto);
     if(g.categoria && !d.categorias.includes(g.categoria) && !CATEGORIAS_DEPRECADAS.includes(g.categoria))
       d.categorias.push(g.categoria);
   });
+
+  /* Proyectos: cada proyecto queda asociado a un solo cliente. Los que ya vienen en el
+     formato nuevo {nombre,cliente} mantienen su asociación tal cual; los que vienen del
+     formato antiguo (solo nombres) o sin cliente asignado se infieren revisando con qué
+     cliente se usaron más veces en el historial de gastos (empate → el gasto más reciente
+     gana). Un proyecto sin ningún gasto asociado queda sin cliente ("adoptable" por el
+     primer cliente con el que se use de nuevo). */
+  const mapaProyectos = new Map();
+  esArr(r.proyectos).forEach(p=>{
+    if(p && typeof p === 'object' && !Array.isArray(p)){
+      const nombre = txt(p.nombre).slice(0,120);
+      if(nombre) mapaProyectos.set(nombre, { nombre, cliente: txt(p.cliente) || null });
+    }
+  });
+  textos(r.proyectos).forEach(n=>{ if(!mapaProyectos.has(n)) mapaProyectos.set(n, { nombre:n, cliente:null }); });
+
+  const conteo = new Map(); // nombre -> Map(cliente -> {n, ultima})
+  d.gastos.forEach(g=>{
+    if(!g.proyecto || !g.cliente || g.cliente === 'Otros') return;
+    if(!mapaProyectos.has(g.proyecto)) mapaProyectos.set(g.proyecto, { nombre: g.proyecto, cliente: null });
+    if(!conteo.has(g.proyecto)) conteo.set(g.proyecto, new Map());
+    const porCliente = conteo.get(g.proyecto);
+    const actual = porCliente.get(g.cliente) || { n:0, ultima:'' };
+    actual.n++; if(g.fecha > actual.ultima) actual.ultima = g.fecha;
+    porCliente.set(g.cliente, actual);
+  });
+  mapaProyectos.forEach(p=>{
+    if(p.cliente) return;
+    const porCliente = conteo.get(p.nombre); if(!porCliente || !porCliente.size) return;
+    let mejor = null;
+    porCliente.forEach((v, cliente)=>{
+      if(!mejor || v.n > mejor.v.n || (v.n === mejor.v.n && v.ultima > mejor.v.ultima)) mejor = { cliente, v };
+    });
+    p.cliente = mejor.cliente;
+  });
+  d.proyectos = [...mapaProyectos.values()];
 
   // ids: se respetan los válidos y únicos, y se reasignan los repetidos o inválidos
   const usados = new Set();
@@ -1276,12 +1318,6 @@ function fillCategorias(sel, placeholder, extra){
   el.innerHTML = (placeholder ? `<option value="">${esc(placeholder)}</option>` : '') +
     ordenadas.map((o,i)=>`<option value="${esc(o)}">${i+1} - ${esc(o)}</option>`).join('');
   if(val && ordenadas.includes(val)) el.value = val;
-}
-/* Si el nombre ya existe con otras mayúsculas o acentos, se reutiliza el que ya está. */
-function canonico(lista, valor){
-  const v = txt(valor).slice(0,120);
-  if(!v) return '';
-  return lista.find(x=>x.localeCompare(v,'es',{sensitivity:'base'}) === 0) || v;
 }
 
 /* ========== NAVEGACIÓN ========== */
@@ -1490,50 +1526,52 @@ function renderVehiculos(){
     </div>`).join('');
 }
 
-/* ========== LISTAS EDITABLES (proyectos) ==========
+/* ========== PROYECTOS (editable, cada uno asociado a un cliente) ==========
    Clientes y categorías son fijos (los define la empresa en el código) y ya no
    se pueden crear/renombrar/borrar desde acá. */
-const LISTAS = {
-  proyectos: {campo:'proyecto',  el:'lista-proyectos',  sing:'el proyecto'}
-};
-function usoDe(clave, nombre){
-  return db.gastos.filter(g=>g[LISTAS[clave].campo] === nombre).length;
+function usoDeProyecto(nombre){
+  return db.gastos.filter(g=>g.proyecto === nombre).length;
 }
 function renderListas(){
-  Object.keys(LISTAS).forEach(clave=>{
-    const el = $(LISTAS[clave].el); if(!el) return;
-    const arr = [...db[clave]].sort((a,b)=>a.localeCompare(b,'es',{sensitivity:'base'}));
-    if(!arr.length){ el.innerHTML = '<span class="vacia">— Ninguno todavía —</span>'; return; }
-    const lapiz = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 20h4L20 8l-4-4L4 16z"/></svg>';
-    el.innerHTML = arr.map(n=>`<span class="chip">
-      <span class="nm">${esc(n)}</span>
-      <span class="n">${usoDe(clave,n)}</span>
-      <button data-accion="renombrar" data-lista="${esc(clave)}" data-nombre="${esc(n)}" aria-label="Renombrar ${esc(n)}">${lapiz}</button>
-      <button class="x" data-accion="borrar-item" data-lista="${esc(clave)}" data-nombre="${esc(n)}" aria-label="Borrar ${esc(n)}">✕</button>
-    </span>`).join('');
-  });
+  const el = $('lista-proyectos'); if(!el) return;
+  const arr = [...db.proyectos].sort((a,b)=>a.nombre.localeCompare(b.nombre,'es',{sensitivity:'base'}));
+  if(!arr.length){ el.innerHTML = '<span class="vacia">— Ninguno todavía —</span>'; return; }
+  const lapiz = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 20h4L20 8l-4-4L4 16z"/></svg>';
+  el.innerHTML = arr.map(p=>`<span class="chip">
+    <span class="nm">${esc(p.nombre)}${p.cliente ? ` — ${esc(p.cliente)}` : ' — sin cliente'}</span>
+    <span class="n">${usoDeProyecto(p.nombre)}</span>
+    <button data-accion="renombrar-proyecto" data-nombre="${esc(p.nombre)}" aria-label="Renombrar ${esc(p.nombre)}">${lapiz}</button>
+    <button class="x" data-accion="borrar-proyecto" data-nombre="${esc(p.nombre)}" aria-label="Borrar ${esc(p.nombre)}">✕</button>
+  </span>`).join('');
 }
-function renombrarItem(clave, viejo){
-  const cfg = LISTAS[clave]; if(!cfg || !db[clave].includes(viejo)) return;
+function renombrarProyecto(viejo){
+  const p = db.proyectos.find(x=>x.nombre === viejo); if(!p) return;
   const nuevo = txt(prompt(`Nuevo nombre para "${viejo}":`, viejo)).slice(0,120);
   if(!nuevo || nuevo === viejo) return;
-  const choque = db[clave].find(x=>x !== viejo && x.localeCompare(nuevo,'es',{sensitivity:'base'}) === 0);
-  const n = usoDe(clave, viejo);
-  if(choque && !confirm(`Ya existe "${choque}". ¿Fusionar los ${n} gasto(s) de "${viejo}" con "${choque}"?`)) return;
-  const destino = choque || nuevo;
+  const choque = db.proyectos.find(x=>x.nombre !== viejo && x.nombre.localeCompare(nuevo,'es',{sensitivity:'base'}) === 0);
+  const n = usoDeProyecto(viejo);
+  if(choque && choque.cliente && p.cliente && choque.cliente !== p.cliente){
+    return toast(`"${choque.nombre}" ya existe y es de ${choque.cliente}: no se puede fusionar con un proyecto de ${p.cliente}`, true);
+  }
+  if(choque && !confirm(`Ya existe "${choque.nombre}". ¿Fusionar los ${n} gasto(s) de "${viejo}" con "${choque.nombre}"?`)) return;
+  const destino = choque ? choque.nombre : nuevo;
   if(!commit(()=>{
-    db.gastos.forEach(g=>{ if(g[cfg.campo] === viejo) g[cfg.campo] = destino; });
-    db[clave] = db[clave].filter(x=>x !== viejo);
-    if(!db[clave].includes(destino)) db[clave].push(destino);
+    db.gastos.forEach(g=>{ if(g.proyecto === viejo) g.proyecto = destino; });
+    if(choque){
+      if(!choque.cliente && p.cliente) choque.cliente = p.cliente;
+      db.proyectos = db.proyectos.filter(x=>x.nombre !== viejo);
+    } else {
+      p.nombre = nuevo;
+    }
   })) return;
   render(); toast(choque ? 'Nombres fusionados' : 'Nombre corregido');
 }
-function borrarItem(clave, nombre){
-  const cfg = LISTAS[clave]; if(!cfg || !db[clave].includes(nombre)) return;
-  const n = usoDe(clave, nombre);
+function borrarProyecto(nombre){
+  const p = db.proyectos.find(x=>x.nombre === nombre); if(!p) return;
+  const n = usoDeProyecto(nombre);
   if(n) return toast(`"${nombre}" se usa en ${n} gasto(s): renómbralo en vez de borrarlo`, true);
-  if(!confirm(`¿Borrar ${cfg.sing} "${nombre}"?`)) return;
-  if(!commit(()=>{ db[clave] = db[clave].filter(x=>x !== nombre); })) return;
+  if(!confirm(`¿Borrar el proyecto "${nombre}"?`)) return;
+  if(!commit(()=>{ db.proyectos = db.proyectos.filter(x=>x.nombre !== nombre); })) return;
   render(); toast('Eliminado');
 }
 
@@ -1545,6 +1583,40 @@ function toggleCategoriaExtras(){
 }
 function toggleClienteExtras(){
   $('cliente-otro-block').style.display = $('g-cliente').value === 'Otros' ? 'block' : 'none';
+}
+function onClienteChange(){
+  toggleClienteExtras();
+  refreshProyecto();
+}
+function proyectosTodos(){
+  return [...new Set(db.proyectos.map(p=>p.nombre))];
+}
+/* Llena el campo Proyecto según el cliente elegido: si es uno de la lista fija, muestra
+   un desplegable solo con los proyectos de ese cliente (+ "Otro" para crear uno nuevo);
+   si es "Otros", vuelve a texto libre sin filtrar. `extraNombre` fuerza que un proyecto
+   histórico aparezca aunque ya no calce con el filtro (para no romper la edición). */
+function refreshProyecto(extraNombre){
+  const cliente = $('g-cliente').value;
+  const esOtrosCliente = cliente === 'Otros';
+  $('proyecto-select-wrap').style.display = esOtrosCliente ? 'none' : '';
+  $('proyecto-libre-wrap').style.display = esOtrosCliente ? '' : 'none';
+  if(esOtrosCliente){
+    $('proyecto-otro-block').style.display = 'none';
+    fillDatalist('dl-proyectos', proyectosTodos());
+    return;
+  }
+  const nombres = db.proyectos.filter(p=>p.cliente === cliente).map(p=>p.nombre);
+  if(extraNombre && !nombres.includes(extraNombre)) nombres.push(extraNombre);
+  nombres.sort((a,b)=>a.localeCompare(b,'es',{sensitivity:'base'}));
+  const el = $('g-proyecto'); const val = el.value;
+  el.innerHTML = '<option value="">— Sin proyecto —</option>' +
+    nombres.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('') +
+    '<option value="Otro">Otro (agregar nuevo)…</option>';
+  el.value = (val === 'Otro' || nombres.includes(val)) ? val : '';
+  toggleProyectoExtras();
+}
+function toggleProyectoExtras(){
+  $('proyecto-otro-block').style.display = $('g-proyecto').value === 'Otro' ? 'block' : 'none';
 }
 function vehiculoSeleccionado(){
   return db.vehiculos.find(v=>v.id === $('g-veh2').value) || null;
@@ -1575,11 +1647,30 @@ async function saveGasto(){
   const desc = $('g-desc').value.trim().slice(0,300);
   const cliente  = $('g-cliente').value;
   const clienteDetalle = cliente === 'Otros' ? $('g-cliente-otro').value.trim().slice(0,120) : '';
-  const proyecto = canonico(db.proyectos, $('g-proyecto').value);
   if(!(monto > 0)) return toast('Falta el monto', true);
   if(!cliente) return toast('Elige un cliente', true);
   if(cliente === 'Otros' && !clienteDetalle) return toast('Escribe el nombre del cliente en "Otros"', true);
   if(!desc) return toast('Falta la descripción', true);
+
+  // Proyecto: con cliente fijo es un desplegable filtrado por ese cliente (+ "Otro" para
+  // crear uno nuevo); con cliente "Otros" sigue siendo texto libre sin asociación.
+  let proyecto = '';
+  if(cliente === 'Otros'){
+    proyecto = txt($('g-proyecto-libre').value).slice(0,120);
+  }else{
+    const sel = $('g-proyecto').value;
+    if(sel === 'Otro'){
+      const nuevo = txt($('g-proyecto-otro').value).slice(0,120);
+      if(!nuevo) return toast('Escribe el nombre del proyecto nuevo', true);
+      if(nuevo.localeCompare('Otro','es',{sensitivity:'base'}) === 0) return toast('Ese nombre no está disponible, elige otro', true);
+      const existente = db.proyectos.find(p=>p.nombre.localeCompare(nuevo,'es',{sensitivity:'base'}) === 0);
+      if(existente && existente.cliente && existente.cliente !== cliente)
+        return toast(`"${existente.nombre}" ya es un proyecto de ${existente.cliente}`, true);
+      proyecto = existente ? existente.nombre : nuevo;
+    }else{
+      proyecto = sel;
+    }
+  }
 
   const cat = $('g-categoria').value || 'Otros';
   const isKm = cat === CAT_KM;
@@ -1639,7 +1730,11 @@ async function saveGasto(){
         db.gastos.push({...campos, rendidoEn:null});
         db.nextId = id + 1;
       }
-      if(proyecto && !db.proyectos.includes(proyecto)) db.proyectos.push(proyecto);
+      if(proyecto && cliente !== 'Otros'){
+        const p = db.proyectos.find(x=>x.nombre === proyecto);
+        if(!p) db.proyectos.push({ nombre: proyecto, cliente });
+        else if(!p.cliente) p.cliente = cliente;
+      }
     });
 
     if(!ok){
@@ -1664,7 +1759,15 @@ function editGasto(id){
   $('g-categoria').value = db.categorias.includes(g.categoria) ? g.categoria : ($('g-categoria').value || '');
   $('g-cliente').value = g.cliente || '';
   $('g-cliente-otro').value = g.clienteDetalle || '';
-  $('g-proyecto').value = g.proyecto || '';
+  toggleClienteExtras();
+  if(g.cliente === 'Otros'){
+    refreshProyecto();
+    $('g-proyecto-libre').value = g.proyecto || '';
+  }else{
+    refreshProyecto(g.proyecto || null);
+    $('g-proyecto').value = g.proyecto || '';
+    toggleProyectoExtras();
+  }
   $('g-caja').value = g.cajaId || '';
   $('g-desc').value = g.descripcion || '';
   $('g-monto').value = g.monto;
@@ -1672,7 +1775,6 @@ function editGasto(id){
   if(g.vehiculoId && db.vehiculos.some(v=>v.id === g.vehiculoId)) $('g-veh2').value = g.vehiculoId;
   $('g-peaje').value = g.peajeMonto ?? '';
   toggleCategoriaExtras();
-  toggleClienteExtras();
   fotoData = null; thumbData = null;
   if(fotoValida(g.thumb)){
     $('preview-img').src = g.thumb;
@@ -1729,14 +1831,21 @@ function filtered(){
 }
 
 /* ========== RENDER ========== */
+function refreshFiltroProyecto(){
+  const cliente = $('f-cliente').value;
+  const nombres = (!cliente || cliente === 'Otros')
+    ? proyectosTodos()
+    : db.proyectos.filter(p=>p.cliente === cliente).map(p=>p.nombre);
+  fill('f-proyecto', nombres.sort((a,b)=>a.localeCompare(b,'es',{sensitivity:'base'})), 'Todos');
+}
 function refreshSelects(){
   fillCategorias('g-categoria', null);
   // el filtro incluye además las categorías que solo existen en gastos viejos
   fillCategorias('f-categoria', 'Todas', db.gastos.map(g=>g.categoria));
-  fillDatalist('dl-proyectos', db.proyectos);
   fill('g-cliente', ordenClientes(db.clientes));
+  refreshProyecto();
   fill('f-cliente', ordenClientes(db.clientes), 'Todos');
-  fill('f-proyecto', db.proyectos, 'Todos');
+  refreshFiltroProyecto();
 
   const vs = $('g-veh2'); const curV = vs.value;
   vs.innerHTML = db.vehiculos.length
@@ -1913,8 +2022,8 @@ function render(){
 function accionesDelegadas(){
   const manejar = t=>{
     const acc = t.dataset.accion;
-    if(acc === 'renombrar')   return renombrarItem(t.dataset.lista, t.dataset.nombre);
-    if(acc === 'borrar-item') return borrarItem(t.dataset.lista, t.dataset.nombre);
+    if(acc === 'renombrar-proyecto') return renombrarProyecto(t.dataset.nombre);
+    if(acc === 'borrar-proyecto')    return borrarProyecto(t.dataset.nombre);
     if(acc === 'borrar-caja') return delCaja(t.dataset.id);
     if(acc === 'borrar-veh')  return delVehiculo(t.dataset.id);
     const id = Number(t.dataset.id);
