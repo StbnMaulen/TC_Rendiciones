@@ -1136,7 +1136,9 @@ function normalizeCaja(c){
   return {
     id: txt(c.id) || 'c' + nuevoId(),
     fecha: fechaValida(c.fecha) ? c.fecha : today(),
-    monto: Math.max(0, Math.round(num(c.monto,0))),
+    /* Puede quedar negativo tras borrar boletas de una caja ya sobregirada sin restaurar
+       (descontarDeCaja): es una corrección contable válida, no un dato corrupto. */
+    monto: Math.round(num(c.monto,0)),
     glosa
   };
 }
@@ -1502,6 +1504,9 @@ function delCaja(id){
 function gastadoCaja(id){
   return db.gastos.filter(g=>g.cajaId === id).reduce((s,g)=>s + num(g.monto,0), 0);
 }
+function saldoLabel(saldo){
+  return saldo < 0 ? 'Excedido ' + money(Math.abs(saldo)) : money(saldo);
+}
 
 /* ========== CONFIGURACIÓN KM / VEHÍCULOS ========== */
 function pintarConfigKm(){
@@ -1823,7 +1828,11 @@ function resetForm(){
 function descontarDeCaja(g){
   if(!g.cajaId) return;
   const caja = db.cajas.find(c=>c.id === g.cajaId);
-  if(caja) caja.monto = Math.max(0, caja.monto - num(g.monto,0));
+  /* Sin piso en 0: si la caja ya estaba sobregirada (gastado > entregado) y se borran de
+     una varias boletas de esa caja, cada descuento debe aplicarse completo. Si se pone un
+     piso en 0 acá, el saldo final queda distinto del saldo antes de borrar — justo lo que
+     esta función existe para evitar. */
+  if(caja) caja.monto = Math.round(caja.monto - num(g.monto,0));
 }
 function borrarGastoInterno(id, descontarCaja){
   const g = db.gastos.find(x=>x.id === id); if(!g) return;
@@ -1912,7 +1921,7 @@ function refreshSelects(){
 
   const cs = $('g-caja'); const cur = cs.value;
   cs.innerHTML = '<option value="">Sin caja / rendición directa</option>' +
-    db.cajas.map(c=>`<option value="${esc(c.id)}">${esc(c.glosa)} · ${money(c.monto - gastadoCaja(c.id))}</option>`).join('');
+    db.cajas.map(c=>`<option value="${esc(c.id)}">${esc(c.glosa)} · ${saldoLabel(c.monto - gastadoCaja(c.id))}</option>`).join('');
   if(cur && db.cajas.some(c=>c.id === cur)) cs.value = cur;
 }
 function renderCajas(){
@@ -1928,7 +1937,7 @@ function renderCajas(){
         <div class="mt">GASTADO ${money(gast)}</div>
       </div>
       <div class="right">
-        <div class="saldo ${saldo < 0 ? 'neg' : ''}">${money(saldo)}</div>
+        <div class="saldo ${saldo < 0 ? 'neg' : ''}">${saldoLabel(saldo)}</div>
         <div class="slabel">SALDO DISPONIBLE</div>
       </div>
     </div>`;
@@ -2289,8 +2298,14 @@ async function generarPDF(){
   const list = filtered();
   if(!list.length) return false;
   const total = list.reduce((s,g)=>s + num(g.monto,0), 0);
-  const d = $('f-desde').value, h = $('f-hasta').value;
-  const periodo = (d || h) ? `${d ? fmtDate(d) : 'inicio'} al ${h ? fmtDate(h) : 'hoy'}` : 'Historial completo';
+  /* El período mostrado en el PDF ya no repite el filtro de fecha crudo (que puede incluir
+     días sin gastos, ej. "01 al 31" cuando solo hay boletas del 6 al 28): se calcula entre
+     la boleta más antigua y la más nueva de las que realmente quedaron en este PDF, para
+     que el período impreso quede acotado a lo que de verdad se está rindiendo. */
+  const fechasList = list.map(g=>g.fecha).sort();
+  const periodo = fechasList[0] === fechasList[fechasList.length-1]
+    ? fmtDate(fechasList[0])
+    : `${fmtDate(fechasList[0])} al ${fmtDate(fechasList[fechasList.length-1])}`;
 
   // las fotos completas viven en IndexedDB: hay que traerlas antes de armar el documento
   const fotos = new Map();
@@ -2327,7 +2342,7 @@ async function generarPDF(){
         const gast = gastadoCaja(id), saldo = c.monto - gast;
         return `<tr><td>${esc(c.glosa)}</td><td>${money(c.monto)}</td><td>${fmtDate(c.fecha)}</td>
           <td style="text-align:right">${money(gast)}</td>
-          <td style="text-align:right" class="${saldo < 0 ? 'neg' : ''}">${saldo < 0 ? 'Excedido ' + money(Math.abs(saldo)) : money(saldo)}</td></tr>`;
+          <td style="text-align:right" class="${saldo < 0 ? 'neg' : ''}">${saldoLabel(saldo)}</td></tr>`;
       }).join('')}
     </table>` : '';
 
