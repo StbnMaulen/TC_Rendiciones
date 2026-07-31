@@ -853,6 +853,16 @@ select.inp{appearance:none;-webkit-appearance:none;
         </div>
         <h2 style="color:var(--red);text-shadow:0 0 14px rgba(255,95,109,.35)">Zona de riesgo</h2>
       </div>
+      <p class="sec-sub" style="margin-top:0">Marca lo que quieras borrar y presiona "Borrar lo seleccionado". El resto de tus datos no se toca.</p>
+      <label class="chk"><input type="checkbox" id="chk-del-nombre"><span class="box"></span><span class="txt">Nombre</span></label>
+      <label class="chk"><input type="checkbox" id="chk-del-proyectos"><span class="box"></span><span class="txt">Proyectos</span></label>
+      <label class="chk"><input type="checkbox" id="chk-del-vehiculos"><span class="box"></span><span class="txt">Vehículos</span></label>
+      <label class="chk"><input type="checkbox" id="chk-del-rendidas"><span class="box"></span><span class="txt">Boletas rendidas</span></label>
+      <label class="chk"><input type="checkbox" id="chk-del-pendientes"><span class="box"></span><span class="txt">Boletas no rendidas</span></label>
+      <label class="chk"><input type="checkbox" id="chk-del-caja"><span class="box"></span><span class="txt">Caja chica</span></label>
+      <button class="btn btn-danger" style="margin-top:10px" onclick="borrarSeleccionado()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>Borrar lo seleccionado</button>
+      <p class="foot" style="margin-top:-6px">Si borras boletas o cajas chicas, se descuenta/ajusta lo correspondiente para que los saldos queden correctos. Las fotos de las boletas borradas se eliminan con ellas.</p>
       <button class="btn btn-danger" onclick="wipeAll()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>Borrar todos los datos</button>
       <p class="foot">Esta acción no se puede deshacer. Descarga tu respaldo JSON antes de continuar.</p>
@@ -1133,7 +1143,9 @@ function normalizeCaja(c){
   return {
     id: txt(c.id) || 'c' + nuevoId(),
     fecha: fechaValida(c.fecha) ? c.fecha : today(),
-    monto: Math.max(0, Math.round(num(c.monto,0))),
+    /* Puede quedar negativo tras borrar boletas de una caja ya sobregirada sin restaurar
+       (descontarDeCaja): es una corrección contable válida, no un dato corrupto. */
+    monto: Math.round(num(c.monto,0)),
     glosa
   };
 }
@@ -1499,6 +1511,9 @@ function delCaja(id){
 function gastadoCaja(id){
   return db.gastos.filter(g=>g.cajaId === id).reduce((s,g)=>s + num(g.monto,0), 0);
 }
+function saldoLabel(saldo){
+  return saldo < 0 ? 'Excedido ' + money(Math.abs(saldo)) : money(saldo);
+}
 
 /* ========== CONFIGURACIÓN KM / VEHÍCULOS ========== */
 function pintarConfigKm(){
@@ -1820,7 +1835,11 @@ function resetForm(){
 function descontarDeCaja(g){
   if(!g.cajaId) return;
   const caja = db.cajas.find(c=>c.id === g.cajaId);
-  if(caja) caja.monto = Math.max(0, caja.monto - num(g.monto,0));
+  /* Sin piso en 0: si la caja ya estaba sobregirada (gastado > entregado) y se borran de
+     una varias boletas de esa caja, cada descuento debe aplicarse completo. Si se pone un
+     piso en 0 acá, el saldo final queda distinto del saldo antes de borrar — justo lo que
+     esta función existe para evitar. */
+  if(caja) caja.monto = Math.round(caja.monto - num(g.monto,0));
 }
 function borrarGastoInterno(id, descontarCaja){
   const g = db.gastos.find(x=>x.id === id); if(!g) return;
@@ -1909,7 +1928,7 @@ function refreshSelects(){
 
   const cs = $('g-caja'); const cur = cs.value;
   cs.innerHTML = '<option value="">Sin caja / rendición directa</option>' +
-    db.cajas.map(c=>`<option value="${esc(c.id)}">${esc(c.glosa)} · ${money(c.monto - gastadoCaja(c.id))}</option>`).join('');
+    db.cajas.map(c=>`<option value="${esc(c.id)}">${esc(c.glosa)} · ${saldoLabel(c.monto - gastadoCaja(c.id))}</option>`).join('');
   if(cur && db.cajas.some(c=>c.id === cur)) cs.value = cur;
 }
 function renderCajas(){
@@ -1925,7 +1944,7 @@ function renderCajas(){
         <div class="mt">GASTADO ${money(gast)}</div>
       </div>
       <div class="right">
-        <div class="saldo ${saldo < 0 ? 'neg' : ''}">${money(saldo)}</div>
+        <div class="saldo ${saldo < 0 ? 'neg' : ''}">${saldoLabel(saldo)}</div>
         <div class="slabel">SALDO DISPONIBLE</div>
       </div>
     </div>`;
@@ -2236,13 +2255,10 @@ function marcarRendidasConfirmado(){
   render();
   toast(`${n} boleta${n === 1 ? '' : 's'} marcada${n === 1 ? '' : 's'} como rendida${n === 1 ? '' : 's'}`);
 }
-function borrarRendidasConfirmado(){
-  cerrarModal('m-confirmar-rendido');
-  const ids = porMarcar || [];
-  porMarcar = null;
-  if(!ids.length) return;
-  if(!confirm(`Esto borra ${ids.length} boleta${ids.length === 1 ? '' : 's'} de este teléfono para siempre, junto con ` +
-    `su${ids.length === 1 ? '' : 's'} foto${ids.length === 1 ? '' : 's'} (ya quedaron en el PDF). ¿Continuar?`)) return;
+/* Borra varios gastos de una vez: descuenta de su caja chica lo que corresponda (la plata
+   ya se gastó de verdad) y borra sus fotos. Usado tanto tras exportar el PDF como desde
+   "Borrar rendidos" en Configuración. */
+function borrarGastosEnBloque(ids){
   const keys = [];
   if(!commit(()=>{
     db.gastos.forEach(g=>{
@@ -2251,10 +2267,72 @@ function borrarRendidasConfirmado(){
       if(g.fotoKey) keys.push(g.fotoKey);
     });
     db.gastos = db.gastos.filter(g=>!ids.includes(g.id));
-  })) return;
+  })) return false;
   keys.forEach(k=>fotoDel(k).catch(()=>{}));
-  render(); actualizarEspacio();
+  actualizarEspacio();
+  return true;
+}
+function borrarRendidasConfirmado(){
+  cerrarModal('m-confirmar-rendido');
+  const ids = porMarcar || [];
+  porMarcar = null;
+  if(!ids.length) return;
+  if(!confirm(`Esto borra ${ids.length} boleta${ids.length === 1 ? '' : 's'} de este teléfono para siempre, junto con ` +
+    `su${ids.length === 1 ? '' : 's'} foto${ids.length === 1 ? '' : 's'} (ya quedaron en el PDF). ¿Continuar?`)) return;
+  if(!borrarGastosEnBloque(ids)) return;
+  render();
   toast(`${ids.length} boleta${ids.length === 1 ? '' : 's'} borrada${ids.length === 1 ? '' : 's'} del historial`);
+}
+/* Borrado selectivo desde Zona de riesgo: cada casilla es independiente, se puede marcar
+   cualquier combinación y se borra todo junto con una sola confirmación. */
+function borrarSeleccionado(){
+  const opciones = {
+    nombre:     $('chk-del-nombre').checked,
+    proyectos:  $('chk-del-proyectos').checked,
+    vehiculos:  $('chk-del-vehiculos').checked,
+    rendidas:   $('chk-del-rendidas').checked,
+    pendientes: $('chk-del-pendientes').checked,
+    caja:       $('chk-del-caja').checked
+  };
+  if(!Object.values(opciones).some(Boolean)) return toast('Marca al menos una opción para borrar', true);
+
+  const nRendidas = db.gastos.filter(g=>g.rendidoEn).length;
+  const nPendientes = db.gastos.filter(g=>!g.rendidoEn).length;
+  const partes = [];
+  if(opciones.nombre) partes.push('el nombre');
+  if(opciones.proyectos) partes.push(`los proyectos (${db.proyectos.length})`);
+  if(opciones.vehiculos) partes.push(`los vehículos (${db.vehiculos.length})`);
+  if(opciones.rendidas) partes.push(`${nRendidas} boleta${nRendidas === 1 ? '' : 's'} rendida${nRendidas === 1 ? '' : 's'}`);
+  if(opciones.pendientes) partes.push(`${nPendientes} boleta${nPendientes === 1 ? '' : 's'} pendiente${nPendientes === 1 ? '' : 's'}`);
+  if(opciones.caja) partes.push(`las cajas chicas (${db.cajas.length})`);
+  if(!confirm(`Esto borra: ${partes.join(', ')}. Las fotos de las boletas borradas se eliminan con ellas. Esta acción no se puede deshacer. ¿Continuar?`)) return;
+
+  // Las boletas se borran primero (con su ajuste de caja chica), antes de tocar proyectos,
+  // vehículos o cajas, para reutilizar exactamente la misma lógica que ya usan "Borrar
+  // rendidos" y el borrado tras exportar el PDF.
+  let idsGastos = [];
+  if(opciones.rendidas) idsGastos = idsGastos.concat(db.gastos.filter(g=>g.rendidoEn).map(g=>g.id));
+  if(opciones.pendientes) idsGastos = idsGastos.concat(db.gastos.filter(g=>!g.rendidoEn).map(g=>g.id));
+  if(idsGastos.length && !borrarGastosEnBloque(idsGastos)) return;
+
+  const ok = commit(()=>{
+    if(opciones.nombre) db.empleado = '';
+    if(opciones.proyectos){
+      db.proyectos = [];
+      db.gastos.forEach(g=>{ g.proyecto = ''; });
+    }
+    if(opciones.vehiculos) db.vehiculos = [];
+    if(opciones.caja){
+      db.cajas = [];
+      db.gastos.forEach(g=>{ g.cajaId = null; });
+    }
+  });
+  if(!ok) return;
+  if(opciones.nombre) $('empleado').value = '';
+  ['chk-del-nombre','chk-del-proyectos','chk-del-vehiculos','chk-del-rendidas','chk-del-pendientes','chk-del-caja']
+    .forEach(id => { $(id).checked = false; });
+  render(); actualizarEspacio();
+  toast('Datos seleccionados borrados');
 }
 function cancelarMarcado(){
   cerrarModal('m-confirmar-rendido');
@@ -2266,8 +2344,14 @@ async function generarPDF(){
   const list = filtered();
   if(!list.length) return false;
   const total = list.reduce((s,g)=>s + num(g.monto,0), 0);
-  const d = $('f-desde').value, h = $('f-hasta').value;
-  const periodo = (d || h) ? `${d ? fmtDate(d) : 'inicio'} al ${h ? fmtDate(h) : 'hoy'}` : 'Historial completo';
+  /* El período mostrado en el PDF ya no repite el filtro de fecha crudo (que puede incluir
+     días sin gastos, ej. "01 al 31" cuando solo hay boletas del 6 al 28): se calcula entre
+     la boleta más antigua y la más nueva de las que realmente quedaron en este PDF, para
+     que el período impreso quede acotado a lo que de verdad se está rindiendo. */
+  const fechasList = list.map(g=>g.fecha).sort();
+  const periodo = fechasList[0] === fechasList[fechasList.length-1]
+    ? fmtDate(fechasList[0])
+    : `${fmtDate(fechasList[0])} al ${fmtDate(fechasList[fechasList.length-1])}`;
 
   // las fotos completas viven en IndexedDB: hay que traerlas antes de armar el documento
   const fotos = new Map();
@@ -2304,7 +2388,7 @@ async function generarPDF(){
         const gast = gastadoCaja(id), saldo = c.monto - gast;
         return `<tr><td>${esc(c.glosa)}</td><td>${money(c.monto)}</td><td>${fmtDate(c.fecha)}</td>
           <td style="text-align:right">${money(gast)}</td>
-          <td style="text-align:right" class="${saldo < 0 ? 'neg' : ''}">${saldo < 0 ? 'Excedido ' + money(Math.abs(saldo)) : money(saldo)}</td></tr>`;
+          <td style="text-align:right" class="${saldo < 0 ? 'neg' : ''}">${saldoLabel(saldo)}</td></tr>`;
       }).join('')}
     </table>` : '';
 
