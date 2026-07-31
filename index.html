@@ -928,8 +928,24 @@ select.inp{appearance:none;-webkit-appearance:none;
     <p id="cr-texto"></p>
     <div class="m-acts">
       <button class="btn btn-primary" onclick="marcarRendidasConfirmado()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>Sí, marcar como rendidas</button>
-      <button class="btn btn-ghost" onclick="cancelarMarcado()">No, dejarlas pendientes</button>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>Marcar como rendidas</button>
+      <button class="btn btn-danger" onclick="borrarRendidasConfirmado()">Borrar del historial (libera espacio)</button>
+      <button class="btn btn-ghost" onclick="cancelarMarcado()">Dejarlas pendientes</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: borrar un gasto pagado con caja chica -->
+<div class="modal" id="m-borrar-gasto" role="dialog" aria-modal="true" aria-labelledby="bg-titulo">
+  <div class="sheet">
+    <span class="corner tr"></span><span class="corner bl"></span>
+    <div class="m-eye" style="color:var(--cy-dim)"><i style="background:var(--cy);box-shadow:0 0 7px var(--cy)"></i>BORRAR GASTO</div>
+    <h3 id="bg-titulo">¿Qué hacemos con el monto de la caja chica?</h3>
+    <p id="bg-texto"></p>
+    <div class="m-acts">
+      <button class="btn btn-ghost" onclick="borrarGastoRestaurando()">Restaurar el monto a la caja</button>
+      <button class="btn btn-danger" onclick="borrarGastoSinRestaurar()">Borrar sin restaurar</button>
+      <button class="btn btn-ghost" onclick="cancelarBorrarGasto()">Cancelar</button>
     </div>
   </div>
 </div>
@@ -1797,13 +1813,51 @@ function resetForm(){
   $('save-btn-txt').textContent = 'Agregar gasto';
   $('cancel-btn').style.display = 'none';
 }
-function delGasto(id){
+/* Si el gasto se pagó con una caja chica, al borrarlo hay que decidir qué pasa con ese
+   monto: "restaurarlo" (queda disponible de nuevo en la caja, como si no se hubiera
+   gastado — corrige un error) o descontarlo del total de la caja (el saldo queda igual
+   que antes de borrar, porque esa plata sí se gastó de verdad). */
+function descontarDeCaja(g){
+  if(!g.cajaId) return;
+  const caja = db.cajas.find(c=>c.id === g.cajaId);
+  if(caja) caja.monto = Math.max(0, caja.monto - num(g.monto,0));
+}
+function borrarGastoInterno(id, descontarCaja){
   const g = db.gastos.find(x=>x.id === id); if(!g) return;
-  if(!confirm(`¿Borrar el gasto "${g.descripcion}" de ${money(g.monto)}?`)) return;
   const key = g.fotoKey;
-  if(!commit(()=>{ db.gastos = db.gastos.filter(x=>x.id !== id); })) return;
+  if(!commit(()=>{
+    if(descontarCaja) descontarDeCaja(g);
+    db.gastos = db.gastos.filter(x=>x.id !== id);
+  })) return;
   if(key) fotoDel(key).catch(()=>{});
   render(); actualizarEspacio(); toast('Gasto eliminado');
+}
+let gastoABorrar = null;
+function delGasto(id){
+  const g = db.gastos.find(x=>x.id === id); if(!g) return;
+  const caja = g.cajaId ? db.cajas.find(c=>c.id === g.cajaId) : null;
+  if(!caja){
+    if(!confirm(`¿Borrar el gasto "${g.descripcion}" de ${money(g.monto)}?`)) return;
+    return borrarGastoInterno(id, false);
+  }
+  gastoABorrar = id;
+  $('bg-texto').textContent = `El gasto "${g.descripcion}" de ${money(g.monto)} está pagado con la caja "${caja.glosa}". ` +
+    `Puedes restaurar ese monto a la caja (si fue un error) o borrarlo dejando el saldo de la caja igual que ahora (si esa plata sí se gastó).`;
+  abrirModal('m-borrar-gasto');
+}
+function borrarGastoRestaurando(){
+  cerrarModal('m-borrar-gasto');
+  const id = gastoABorrar; gastoABorrar = null;
+  if(id != null) borrarGastoInterno(id, false);
+}
+function borrarGastoSinRestaurar(){
+  cerrarModal('m-borrar-gasto');
+  const id = gastoABorrar; gastoABorrar = null;
+  if(id != null) borrarGastoInterno(id, true);
+}
+function cancelarBorrarGasto(){
+  cerrarModal('m-borrar-gasto');
+  gastoABorrar = null;
 }
 
 /* ========== FILTROS ========== */
@@ -2145,8 +2199,8 @@ function exportPDF(){
     chk.checked = false; lbl.style.display = 'none';
   }else{
     chk.checked = true; lbl.style.display = 'flex';
-    $('chk-txt').innerHTML = `Marcar ${sinRendir} boleta${sinRendir === 1 ? '' : 's'} como rendida${sinRendir === 1 ? '' : 's'}` +
-      `<em>Te preguntamos de nuevo después de generar el PDF</em>`;
+    $('chk-txt').innerHTML = `Gestionar ${sinRendir} boleta${sinRendir === 1 ? '' : 's'} pendiente${sinRendir === 1 ? '' : 's'}` +
+      `<em>Te preguntamos después de generar el PDF si marcarlas como rendidas o borrarlas</em>`;
   }
   abrirModal('m-exportar');
 }
@@ -2163,8 +2217,10 @@ async function confirmarExport(){
   if(!ok || !marcar || !ids.length) return;
   porMarcar = ids;
   $('cr-texto').textContent =
-    `Si el PDF quedó guardado, marco ${ids.length} boleta${ids.length === 1 ? '' : 's'} como ` +
-    `rendida${ids.length === 1 ? '' : 's'} con fecha ${fmtDate(today())}. Si cancelaste la impresión, déjalas pendientes.`;
+    `Si el PDF quedó guardado, elige qué hacer con ${ids.length} boleta${ids.length === 1 ? '' : 's'}: ` +
+    `márcala${ids.length === 1 ? '' : 's'} como rendida${ids.length === 1 ? '' : 's'} (con fecha ${fmtDate(today())}, ` +
+    `queda el registro y la foto) o bórrala${ids.length === 1 ? '' : 's'} del historial (libera espacio; se borra también ` +
+    `su foto y, si estaba pagada con caja chica, se descuenta el monto del total de esa caja). Si cancelaste la impresión, déjalas pendientes.`;
   setTimeout(()=>abrirModal('m-confirmar-rendido'), 600);
 }
 function marcarRendidasConfirmado(){
@@ -2179,6 +2235,26 @@ function marcarRendidasConfirmado(){
   })) return;
   render();
   toast(`${n} boleta${n === 1 ? '' : 's'} marcada${n === 1 ? '' : 's'} como rendida${n === 1 ? '' : 's'}`);
+}
+function borrarRendidasConfirmado(){
+  cerrarModal('m-confirmar-rendido');
+  const ids = porMarcar || [];
+  porMarcar = null;
+  if(!ids.length) return;
+  if(!confirm(`Esto borra ${ids.length} boleta${ids.length === 1 ? '' : 's'} de este teléfono para siempre, junto con ` +
+    `su${ids.length === 1 ? '' : 's'} foto${ids.length === 1 ? '' : 's'} (ya quedaron en el PDF). ¿Continuar?`)) return;
+  const keys = [];
+  if(!commit(()=>{
+    db.gastos.forEach(g=>{
+      if(!ids.includes(g.id)) return;
+      descontarDeCaja(g);
+      if(g.fotoKey) keys.push(g.fotoKey);
+    });
+    db.gastos = db.gastos.filter(g=>!ids.includes(g.id));
+  })) return;
+  keys.forEach(k=>fotoDel(k).catch(()=>{}));
+  render(); actualizarEspacio();
+  toast(`${ids.length} boleta${ids.length === 1 ? '' : 's'} borrada${ids.length === 1 ? '' : 's'} del historial`);
 }
 function cancelarMarcado(){
   cerrarModal('m-confirmar-rendido');
@@ -2494,6 +2570,11 @@ async function boot(){
   }catch(e){
     setTimeout(()=>toast('No se pudo acceder al almacén de fotos en este teléfono', true), 1200);
   }
+
+  /* Se le pide al navegador que trate estos datos como almacenamiento "persistente": sin
+     esto, Chrome puede borrar localStorage/IndexedDB de la app en silencio si el teléfono
+     anda con poco espacio, aunque el usuario nunca haya tocado "borrar todo". */
+  try{ if(navigator.storage && navigator.storage.persist) await navigator.storage.persist(); }catch(e){}
 
   $('empleado').value = db.empleado || '';
   $('empleado').addEventListener('input', e => {
