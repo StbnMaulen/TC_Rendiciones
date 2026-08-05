@@ -299,6 +299,9 @@ select.inp{appearance:none;-webkit-appearance:none;
 .brow .lbl{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;margin-bottom:6px;}
 .brow .lbl span:first-child{color:var(--txt-mut);}
 .brow .lbl span:last-child{font-family:var(--f-disp);font-weight:600;color:var(--txt);flex:none;}
+.brow.neto{padding-top:8px;margin-top:2px;border-top:1px dashed var(--line);}
+.brow.neto .lbl span:first-child{color:var(--txt);font-weight:600;}
+.brow.neto .lbl span:last-child{color:var(--mint);font-size:16px;text-shadow:0 0 10px rgba(95,240,200,.4);}
 .track{height:6px;background:rgba(34,211,255,.07);border:1px solid rgba(34,211,255,.12);overflow:hidden;}
 .track i{display:block;height:100%;background:linear-gradient(90deg,var(--cy-dim),var(--cy) 60%,var(--mint));box-shadow:0 0 10px var(--cy-glow);transition:width .5s cubic-bezier(.2,.8,.2,1);}
 
@@ -724,6 +727,7 @@ select.inp{appearance:none;-webkit-appearance:none;
         <div class="amt" id="s-total">$0</div>
         <div class="cnt" id="s-count">0 BOLETAS</div>
       </div>
+      <div id="s-neto" style="display:none"></div>
       <div id="s-breakdowns"></div>
     </div>
   </div>
@@ -1963,6 +1967,20 @@ function renderSummary(list){
   $('ro-total').textContent = money(total);
   renderReadout3(list);
 
+  /* Lo pagado con caja chica ya se le entregó al empleado por adelantado: se resta del
+     total para mostrar cuánto le queda por reembolsar realmente a la empresa. */
+  const totalCaja = list.filter(g=>g.cajaId).reduce((s,g)=>s + num(g.monto,0), 0);
+  const elNeto = $('s-neto');
+  if(totalCaja > 0){
+    elNeto.style.display = 'block';
+    elNeto.innerHTML = `
+      <div class="brow"><div class="lbl"><span>Cubierto con caja chica</span><span>-${money(totalCaja)}</span></div></div>
+      <div class="brow neto"><div class="lbl"><span>Neto a reembolsar</span><span>${money(total - totalCaja)}</span></div></div>`;
+  }else{
+    elNeto.style.display = 'none';
+    elNeto.innerHTML = '';
+  }
+
   const blocks = [['Por cliente','cliente'],['Por proyecto','proyecto'],['Por categoría','categoria']];
   $('s-breakdowns').innerHTML = blocks.map(([label,key])=>{
     const rows = breakdown(list, key);
@@ -2409,6 +2427,10 @@ async function generarPDF(){
       </div>
     </div>` : '';
 
+  /* Lo pagado con caja chica ya se le entregó al empleado por adelantado: no cuenta para
+     lo que la empresa todavía le debe reembolsar. */
+  const totalCaja = list.filter(g=>g.cajaId).reduce((s,g)=>s + num(g.monto,0), 0);
+  const netoReembolsar = total - totalCaja;
   const rendidas = list.filter(g=>g.rendidoEn).length;
   const w = window.open('', '_blank');
   if(!w){ toast('Permite las ventanas emergentes para generar el PDF', true); return false; }
@@ -2451,6 +2473,8 @@ async function generarPDF(){
     table.main td{border-bottom:1px solid #E4EAED;padding:8px 7px;vertical-align:top;}
     table.main td.r{text-align:right;font-weight:bold;white-space:nowrap;}
     table.main tr.tot td{border-top:2px solid #16212B;font-weight:bold;font-size:13px;border-bottom:none;}
+    table.main tr.sub td{color:#5C7180;font-size:11px;border-bottom:none;padding-top:3px;padding-bottom:3px;}
+    table.main tr.neto td{border-top:2px solid #0E7C94;color:#0E7C94;font-size:14px;}
     .chk-ok{color:#1E9E5C;font-weight:bold;}
     .chk-no{color:#C7CFD3;}
 
@@ -2500,6 +2524,9 @@ async function generarPDF(){
         <td>${g.rendidoEn ? `<span class="chk-ok">✓ ${fmtDate(g.rendidoEn)}</span>` : '<span class="chk-no">—</span>'}</td>
       </tr>`).join('')}
       <tr class="tot"><td colspan="5">TOTAL</td><td class="r">${money(total)}</td><td></td></tr>
+      ${totalCaja > 0 ? `
+      <tr class="sub"><td colspan="5">Cubierto con caja chica (ya entregada)</td><td class="r">-${money(totalCaja)}</td><td></td></tr>
+      <tr class="tot neto"><td colspan="5">NETO A REEMBOLSAR</td><td class="r">${money(netoReembolsar)}</td><td></td></tr>` : ''}
     </table>
 
     <div class="footer"><span>Mis Boletas · True Controls</span><span>Generado ${fmtDate(today())}</span></div>
