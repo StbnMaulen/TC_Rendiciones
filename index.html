@@ -2471,6 +2471,19 @@ async function generarPDF(){
     .totalbar .l2{font-size:24px;font-weight:bold;margin-top:2px;}
     .totalbar .r{text-align:right;font-size:11px;color:#B9CBD4;}
 
+    .stat-cards{display:flex;gap:12px;margin-bottom:20px;}
+    .stat-card{
+      flex:1;border:1px solid #D8E2E7;border-left:4px solid #0E7C94;border-radius:3px;
+      padding:10px 14px;background:#FBFCFD;
+    }
+    .stat-card .sc-lbl{font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:#5C7180;}
+    .stat-card .sc-val{font-size:19px;font-weight:bold;color:#16212B;margin-top:2px;}
+    .stat-card .sc-cap{font-size:9px;color:#8A9AA6;margin-top:2px;}
+    .stat-card.pos{border-left-color:#1E9E5C;}
+    .stat-card.pos .sc-val{color:#1E9E5C;}
+    .stat-card.neg{border-left-color:#C0392B;}
+    .stat-card.neg .sc-val{color:#C0392B;}
+
     .section-title{
       font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:#0E7C94;
       font-weight:bold;margin:22px 0 10px;border-bottom:1px solid #D8E2E7;padding-bottom:5px;
@@ -2519,8 +2532,27 @@ async function generarPDF(){
 
     <div class="totalbar">
       <div><div class="l1">Total gastos</div><div class="l2">${money(total)}</div></div>
-      <div class="r">${list.length} boleta${list.length === 1 ? '' : 's'}<br>${rendidas} marcada${rendidas === 1 ? '' : 's'} como rendida${rendidas === 1 ? '' : 's'}<br>Saldo Caja Chica: ${saldoLabel(saldoCajaActual)}</div>
+      <div class="r">${list.length} boleta${list.length === 1 ? '' : 's'}<br>${rendidas} marcada${rendidas === 1 ? '' : 's'} como rendida${rendidas === 1 ? '' : 's'}</div>
     </div>
+
+    ${db.cajas.length ? `
+    <div class="stat-cards">
+      <div class="stat-card">
+        <div class="sc-lbl">Caja Chica</div>
+        <div class="sc-val">${money(entregadoCajaChica())}</div>
+        <div class="sc-cap">Ingresos a la fecha</div>
+      </div>
+      <div class="stat-card">
+        <div class="sc-lbl">Gastado</div>
+        <div class="sc-val">${money(gastadoCajaChica())}</div>
+        <div class="sc-cap">Gastos documentados</div>
+      </div>
+      <div class="stat-card ${saldoCajaActual < 0 ? 'neg' : 'pos'}">
+        <div class="sc-lbl">Saldo Caja Chica</div>
+        <div class="sc-val">${saldoLabel(saldoCajaActual)}</div>
+        <div class="sc-cap">${saldoCajaActual < 0 ? 'La empresa debe reembolsar este monto' : 'Disponible para seguir gastando'}</div>
+      </div>
+    </div>` : ''}
 
     <div class="section-title">Resumen</div>
     <div class="breakdowns">${breakdownsHTML}</div>
