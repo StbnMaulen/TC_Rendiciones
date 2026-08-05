@@ -1140,7 +1140,8 @@ function normalizeGasto(g){
     desgastePct: g.desgastePct == null ? null : Math.max(0, num(g.desgastePct,0)),
     peajeMonto: Math.round(num(g.peajeMonto,0)) > 0 ? Math.round(num(g.peajeMonto,0)) : null,
     fotoKey: txt(g.fotoKey) || null,
-    thumb: fotoValida(g.thumb) ? g.thumb : null
+    thumb: fotoValida(g.thumb) ? g.thumb : null,
+    creadoEn: num(g.creadoEn, 0) > 0 ? Math.round(num(g.creadoEn, 0)) : 0
   };
   // Foto heredada en base64 (versión anterior de la app o respaldo): migrarFotos() la mueve.
   if(fotoValida(g.foto)) o.foto = g.foto;
@@ -1155,7 +1156,8 @@ function normalizeCaja(c){
   return {
     id: txt(c.id) || 'c' + nuevoId(),
     fecha: fechaValida(c.fecha) ? c.fecha : today(),
-    monto: Math.round(num(c.monto,0))
+    monto: Math.round(num(c.monto,0)),
+    creadoEn: num(c.creadoEn, 0) > 0 ? Math.round(num(c.creadoEn, 0)) : 0
   };
 }
 function normalizeVehiculo(v){
@@ -1261,6 +1263,17 @@ function normalizeDb(raw){
   });
   const maxId = d.gastos.reduce((m,g)=>Math.max(m, g.id), 0);
   d.nextId = Math.max(Math.floor(num(r.nextId,0)), maxId + 1, 1);
+
+  /* creadoEn: desempate interno para ordenar movimientos del mismo día (nunca se muestra).
+     Los registros que ya lo traen del respaldo lo conservan; a los antiguos que no lo tienen
+     se les asigna uno sintético pero estable entre recargas (no usar Date.now() acá, porque
+     cambiaría cada vez que se abre la app y rompería el orden ya fijado). */
+  d.gastos.forEach(g=>{
+    if(!g.creadoEn) g.creadoEn = Date.parse(g.fecha + 'T00:00:00') + g.id;
+  });
+  d.cajas.forEach((c,i)=>{
+    if(!c.creadoEn) c.creadoEn = Date.parse(c.fecha + 'T00:00:00') + i;
+  });
 
   d.cajaAjuste = Math.round(num(r.cajaAjuste, 0));
 
@@ -1504,7 +1517,7 @@ function addCaja(){
   const monto = Math.round(num($('cj-monto').value, 0));
   if(!(monto > 0)) return toast('Ingresa el monto', true);
   const fecha = fechaValida($('cj-fecha').value) ? $('cj-fecha').value : today();
-  if(!commit(()=>{ db.cajas.push({id:'c'+nuevoId(), fecha, monto}); })) return;
+  if(!commit(()=>{ db.cajas.push({id:'c'+nuevoId(), fecha, monto, creadoEn: Date.now()}); })) return;
   $('cj-monto').value = '';
   render(); toast('Ingreso registrado');
 }
@@ -1769,7 +1782,7 @@ async function saveGasto(){
         // se parte del gasto existente: así rendidoEn (y cualquier campo futuro) no se pierde
         db.gastos[db.gastos.indexOf(anterior)] = {...anterior, ...campos};
       }else{
-        db.gastos.push({...campos, rendidoEn:null});
+        db.gastos.push({...campos, rendidoEn:null, creadoEn: Date.now()});
         db.nextId = id + 1;
       }
       if(proyecto && cliente !== 'Otros'){
@@ -2047,9 +2060,9 @@ function movimientosDetalle(list){
   const fDesde = $('f-desde').value, fHasta = $('f-hasta').value;
   const ingresosEnRango = db.cajas.filter(c => (!fDesde || c.fecha >= fDesde) && (!fHasta || c.fecha <= fHasta));
   return [
-    ...ingresosEnRango.map(c=>({tipo:'ingreso', fecha:c.fecha, caja:c})),
-    ...list.map(g=>({tipo:'gasto', fecha:g.fecha, gasto:g}))
-  ].sort((a,b)=> a.fecha.localeCompare(b.fecha) || (a.tipo === b.tipo ? 0 : (a.tipo === 'ingreso' ? -1 : 1)));
+    ...ingresosEnRango.map(c=>({tipo:'ingreso', fecha:c.fecha, creadoEn:c.creadoEn, caja:c})),
+    ...list.map(g=>({tipo:'gasto', fecha:g.fecha, creadoEn:g.creadoEn, gasto:g}))
+  ].sort((a,b)=> a.fecha.localeCompare(b.fecha) || (a.creadoEn - b.creadoEn) || (a.tipo === b.tipo ? 0 : (a.tipo === 'ingreso' ? -1 : 1)));
 }
 function renderGastos(movs){
   const el = $('gastos-list');
@@ -2417,9 +2430,9 @@ async function generarPDF(){
       db.gastos.filter(g=>g.fecha < fDesde).reduce((s,g)=>s+num(g.monto,0),0)
     : 0;
   const movimientos = [
-    ...ingresosEnRango.map(c=>({tipo:'ingreso', fecha:c.fecha, monto:c.monto})),
-    ...list.map(g=>({tipo:'gasto', fecha:g.fecha, gasto:g}))
-  ].sort((a,b)=> a.fecha.localeCompare(b.fecha) || (a.tipo === b.tipo ? 0 : (a.tipo === 'ingreso' ? -1 : 1)));
+    ...ingresosEnRango.map(c=>({tipo:'ingreso', fecha:c.fecha, creadoEn:c.creadoEn, monto:c.monto})),
+    ...list.map(g=>({tipo:'gasto', fecha:g.fecha, creadoEn:g.creadoEn, gasto:g}))
+  ].sort((a,b)=> a.fecha.localeCompare(b.fecha) || (a.creadoEn - b.creadoEn) || (a.tipo === b.tipo ? 0 : (a.tipo === 'ingreso' ? -1 : 1)));
 
   let saldoCorrida = saldoInicial;
   const filasHTML = [];
