@@ -333,6 +333,10 @@ select.inp{appearance:none;-webkit-appearance:none;
   color:var(--cy);cursor:pointer;padding:2px 0;text-transform:uppercase;
 }
 .exp .acts button.del{color:var(--red);}
+.exp.ingreso{border-color:rgba(95,240,200,.3);background:rgba(95,240,200,.05);}
+.exp.ingreso .thumb{background:rgba(95,240,200,.08);border-color:rgba(95,240,200,.3);color:var(--mint);}
+.exp.ingreso .desc{color:var(--mint);}
+.exp.ingreso .amt{color:var(--mint);text-shadow:0 0 10px rgba(95,240,200,.4);}
 
 .empty{
   text-align:center;padding:34px 16px;border:1px dashed var(--line);margin-top:12px;
@@ -669,7 +673,7 @@ select.inp{appearance:none;-webkit-appearance:none;
       </div>
 
       <div id="caja-resumen"></div>
-      <div class="lista" id="cajas-list"></div>
+      <p class="foot" style="margin-top:10px">El detalle de cada ingreso y gasto, en orden, está en <b style="color:var(--cy)">Resumen</b>.</p>
     </div>
   </div>
 </section>
@@ -1934,14 +1938,6 @@ function renderCajas(){
       <div class="slabel">SALDO DISPONIBLE</div>
     </div>
   </div>`;
-
-  const el = $('cajas-list');
-  if(!db.cajas.length){ el.innerHTML = '<span class="vacia">— Ningún ingreso todavía —</span>'; return; }
-  const ingresos = [...db.cajas].sort((a,b)=>b.fecha.localeCompare(a.fecha));
-  el.innerHTML = `<div class="eyebrow">Ingresos registrados</div>` + ingresos.map(c=>`<span class="chip">
-    <span class="nm">${fmtDate(c.fecha)} — ${money(c.monto)}</span>
-    <button class="x" data-accion="borrar-caja" data-id="${esc(c.id)}" aria-label="Borrar ingreso del ${fmtDate(c.fecha)}">✕</button>
-  </span>`).join('');
 }
 function breakdown(list, key){
   const m = {};
@@ -2043,13 +2039,37 @@ function irAPendientes(){
   go('resumen');
   setFold('fold','fold-head', true);
 }
-function renderGastos(list){
+/* Junta los gastos del filtro actual con los ingresos de Caja Chica del mismo rango de
+   fechas, en una sola secuencia — igual que el detalle del PDF. Se ordena de más antiguo
+   a más nuevo: lo que se ingresó primero queda arriba, lo último abajo, siguiendo el
+   recorrido histórico real en vez de mostrar los totales sueltos. */
+function movimientosDetalle(list){
+  const fDesde = $('f-desde').value, fHasta = $('f-hasta').value;
+  const ingresosEnRango = db.cajas.filter(c => (!fDesde || c.fecha >= fDesde) && (!fHasta || c.fecha <= fHasta));
+  return [
+    ...ingresosEnRango.map(c=>({tipo:'ingreso', fecha:c.fecha, caja:c})),
+    ...list.map(g=>({tipo:'gasto', fecha:g.fecha, gasto:g}))
+  ].sort((a,b)=> a.fecha.localeCompare(b.fecha) || (a.tipo === b.tipo ? 0 : (a.tipo === 'ingreso' ? -1 : 1)));
+}
+function renderGastos(movs){
   const el = $('gastos-list');
-  if(!list.length){
+  if(!movs.length){
     el.innerHTML = '<div class="empty">SIN REGISTROS EN ESTE PERÍODO<br>Agrega tu primera boleta desde la pestaña REGISTRAR</div>';
     return;
   }
-  el.innerHTML = list.map(g=>{
+  el.innerHTML = movs.map(m=>{
+    if(m.tipo === 'ingreso'){
+      const c = m.caja;
+      return `<div class="exp ingreso">
+        <div class="thumb"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></div>
+        <div class="info">
+          <div class="l1"><div class="desc">Ingreso Caja Chica</div><div class="amt">+${money(c.monto)}</div></div>
+          <div class="tags"><span class="tag">${fmtDate(c.fecha)}</span></div>
+          <div class="acts"><button class="del" data-accion="borrar-caja" data-id="${esc(c.id)}">Borrar</button></div>
+        </div>
+      </div>`;
+    }
+    const g = m.gasto;
     const tieneFoto = !!(g.fotoKey || g.thumb);
     return `<div class="exp ${g.rendidoEn ? 'rendida' : ''}">
       <div class="thumb"${tieneFoto ? ` data-accion="ver" data-id="${g.id}" role="button" tabindex="0" aria-label="Ver la foto de esta boleta"` : ''}>
@@ -2093,7 +2113,7 @@ function render(){
   renderListas();
   const list = filtered();
   renderSummary(list);
-  renderGastos(list);
+  renderGastos(movimientosDetalle(list));
 }
 
 /* ========== ACCIONES DELEGADAS ==========
@@ -2113,7 +2133,7 @@ function accionesDelegadas(){
     if(acc === 'borrar')    return delGasto(id);
     if(acc === 'desmarcar') return desmarcarRendicion(id);
   };
-  ['gastos-list','cajas-list','vehiculos-list','lista-proyectos'].forEach(id=>{
+  ['gastos-list','vehiculos-list','lista-proyectos'].forEach(id=>{
     const cont = $(id); if(!cont) return;
     cont.addEventListener('click', e=>{
       const t = e.target.closest('[data-accion]');
